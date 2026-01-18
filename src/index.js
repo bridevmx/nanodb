@@ -2,10 +2,11 @@ const fastify = require('fastify')({
   logger: {
     level: process.env.NODE_ENV === 'development' ? 'info' : 'error'
   },
-  http2: true,
-  https: process.env.NODE_ENV === 'production' ? {
-    allowHTTP1: true // Permitir HTTP/1.1 como fallback
-  } : undefined,
+  // HTTP/2 requiere certificados SSL - deshabilitado por ahora
+  // http2: true,
+  // https: process.env.NODE_ENV === 'production' ? {
+  //   allowHTTP1: true
+  // } : undefined,
   keepAliveTimeout: 30000, // 30 segundos
   requestTimeout: 60000 // 60 segundos
 });
