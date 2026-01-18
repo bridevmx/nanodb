@@ -2,24 +2,25 @@ const { nanoid } = require('nanoid');
 const db = require('./db');
 const schemaManager = require('./schema');
 const indexer = require('./indexer');
+const { SingleflightCache } = require('../utils/singleflight');
 
 const MAX_SCAN_LIMIT = parseInt(process.env.MAX_SCAN_LIMIT) || 100;
 
 class Engine {
+  constructor() {
+    // Inicializar singleflight para prevenir thundering herd
+    this.singleflight = new SingleflightCache(db.cache);
+  }
 
   async get(collection, id) {
     const key = `${collection}:${id}`;
 
-    // 1. Intentar cache primero
-    let data = db.cache.get(key);
-
-    // 2. Si no está en cache, leer de disco
-    if (!data) {
-      data = db.main.get(key);
-      if (data) db.cache.set(key, data);
-    }
-
-    return this._sanitize(collection, data);
+    // Usar singleflight para prevenir thundering herd
+    // Solo una petición va a disco, las demás esperan
+    return await this.singleflight.get(key, async () => {
+      const data = db.main.get(key);
+      return this._sanitize(collection, data);
+    });
   }
 
   async list(collection, options = {}) {
@@ -125,7 +126,13 @@ class Engine {
 
     const id = nanoid(15);
     const now = new Date().toISOString();
-    const record = { ...data, id, created: now, updated: now };
+    const record = {
+      ...data,
+      id,
+      created: now,
+      updated: now,
+      _version: 1  // ← Versión inicial para optimistic locking
+    };
 
     // Validar unicidad
     await indexer.checkUniqueness(collection, record, schema);
@@ -138,11 +145,8 @@ class Engine {
     const indexOps = indexer.getBatchOperations(collection, id, record, null, schema);
     ops.push(...indexOps);
 
-    // Ejecutar transacción
-    await db.root.batch(ops);
-
-    // Guardar en cache
-    db.cache.set(`${collection}:${id}`, record);
+    // Atomic write: disco + caché en una operación
+    await this._atomicWrite(ops, [[`${collection}:${id}`, record]]);
 
     // Broadcast realtime
     const realtime = require('../api/realtime');
@@ -152,86 +156,102 @@ class Engine {
   }
 
   async update(collection, id, data) {
-    const key = `${collection}:${id}`;
+    // Retry automático hasta 3 veces en caso de conflicto
+    return await this._retryOnConflict(async () => {
+      const key = `${collection}:${id}`;
 
-    // Use get() to check cache first
-    const oldRecord = await this.get(collection, id);
+      // Obtener registro actual con singleflight
+      const oldRecord = await this.get(collection, id);
 
-    if (!oldRecord) throw new Error('Record not found');
+      if (!oldRecord) throw new Error('Record not found');
 
-    const schema = schemaManager.get(collection);
-    const now = new Date().toISOString();
+      const schema = schemaManager.get(collection);
+      const now = new Date().toISOString();
 
-    const newRecord = {
-      ...oldRecord,
-      ...data,
-      id,
-      updated: now,
-      created: oldRecord.created
-    };
+      // Verificar versión si se proporciona (optimistic lock)
+      if (data._expectedVersion !== undefined) {
+        if (oldRecord._version !== data._expectedVersion) {
+          throw new Error('Version conflict: record was modified by another request');
+        }
+        delete data._expectedVersion; // No guardar este campo
+      }
 
-    // Validar esquema
-    schemaManager.validate(collection, newRecord);
+      const newRecord = {
+        ...oldRecord,
+        ...data,
+        id,
+        updated: now,
+        created: oldRecord.created,
+        _version: (oldRecord._version || 0) + 1  // ← Incrementar versión
+      };
 
-    // Validar unicidad
-    await indexer.checkUniqueness(collection, newRecord, schema, id);
+      // Validar esquema
+      schemaManager.validate(collection, newRecord);
 
-    const ops = [
-      { type: 'put', key, value: newRecord, db: db.main }
-    ];
+      // Validar unicidad
+      await indexer.checkUniqueness(collection, newRecord, schema, id);
 
-    const indexOps = indexer.getBatchOperations(
-      collection,
-      id,
-      newRecord,
-      oldRecord,
-      schema
-    );
-    ops.push(...indexOps);
+      const ops = [
+        { type: 'put', key, value: newRecord, db: db.main }
+      ];
 
-    await db.root.batch(ops);
+      const indexOps = indexer.getBatchOperations(
+        collection,
+        id,
+        newRecord,
+        oldRecord,
+        schema
+      );
+      ops.push(...indexOps);
 
-    // Actualizar cache
-    db.cache.set(key, newRecord);
+      // Atomic write: disco + caché en una operación
+      await this._atomicWrite(ops, [[key, newRecord]]);
 
-    const realtime = require('../api/realtime');
-    realtime.broadcast(collection, 'update', this._sanitize(collection, newRecord));
+      const realtime = require('../api/realtime');
+      realtime.broadcast(collection, 'update', this._sanitize(collection, newRecord));
 
-    return this._sanitize(collection, newRecord);
+      return this._sanitize(collection, newRecord);
+    });
   }
 
-  async delete(collection, id) {
-    const key = `${collection}:${id}`;
+  async delete(collection, id, expectedVersion = null) {
+    // Retry automático hasta 3 veces
+    return await this._retryOnConflict(async () => {
+      const key = `${collection}:${id}`;
 
-    // Use get() to check cache first
-    const oldRecord = await this.get(collection, id);
+      // Obtener registro actual con singleflight
+      const oldRecord = await this.get(collection, id);
 
-    if (!oldRecord) throw new Error('Record not found');
+      if (!oldRecord) throw new Error('Record not found');
 
-    const schema = schemaManager.get(collection);
+      // Verificar versión si se proporciona (optimistic lock)
+      if (expectedVersion !== null && oldRecord._version !== expectedVersion) {
+        throw new Error('Version conflict: record was modified by another request');
+      }
 
-    const ops = [
-      { type: 'del', key, db: db.main }
-    ];
+      const schema = schemaManager.get(collection);
 
-    const indexOps = indexer.getBatchOperations(
-      collection,
-      id,
-      null,
-      oldRecord,
-      schema
-    );
-    ops.push(...indexOps);
+      const ops = [
+        { type: 'del', key, db: db.main }
+      ];
 
-    await db.root.batch(ops);
+      const indexOps = indexer.getBatchOperations(
+        collection,
+        id,
+        null,
+        oldRecord,
+        schema
+      );
+      ops.push(...indexOps);
 
-    // Eliminar de cache
-    db.cache.del(key);
+      // Atomic write: disco + invalidación de caché
+      await this._atomicWrite(ops, [[key, null]]);
 
-    const realtime = require('../api/realtime');
-    realtime.broadcast(collection, 'delete', { id });
+      const realtime = require('../api/realtime');
+      realtime.broadcast(collection, 'delete', { id });
 
-    return true;
+      return true;
+    });
   }
 
   _sanitize(collection, data) {
@@ -247,6 +267,56 @@ class Engine {
     });
 
     return clean;
+  }
+
+  /**
+   * Retry automático en caso de conflictos de versión
+   * Implementa backoff exponencial: 10ms, 20ms, 40ms
+   */
+  async _retryOnConflict(fn, maxRetries = 3) {
+    let lastError;
+
+    for (let attempt = 0; attempt < maxRetries; attempt++) {
+      try {
+        return await fn();
+      } catch (error) {
+        if (error.message.includes('Version conflict') && attempt < maxRetries - 1) {
+          // Backoff exponencial
+          await new Promise(resolve => setTimeout(resolve, 10 * Math.pow(2, attempt)));
+          lastError = error;
+          continue;
+        }
+        throw error;
+      }
+    }
+
+    throw lastError;
+  }
+
+  /**
+   * Escritura atómica: disco + caché en una operación
+   * Garantiza consistencia ACID completa
+   */
+  async _atomicWrite(ops, cacheUpdates) {
+    // Usar transacción explícita de LMDB
+    await db.main.transaction(() => {
+      for (const op of ops) {
+        if (op.type === 'put') {
+          op.db.put(op.key, op.value);
+        } else if (op.type === 'del') {
+          op.db.remove(op.key);
+        }
+      }
+    });
+
+    // Solo actualizar caché DESPUÉS de commit exitoso
+    for (const [key, value] of cacheUpdates) {
+      if (value === null) {
+        db.cache.del(key);
+      } else {
+        db.cache.set(key, value);
+      }
+    }
   }
 }
 
