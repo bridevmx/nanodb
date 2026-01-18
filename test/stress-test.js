@@ -10,8 +10,8 @@
  * - Cache saturation
  */
 
-// const API_URL = 'https://nanodb.on.shiper.app';
-const API_URL = 'http://localhost:3000';
+const API_URL = 'https://nanodb.on.shiper.app';
+// const API_URL = 'http://localhost:3000';
 const EMAIL = process.env.EMAIL || 'admin@local.host';
 const PASSWORD = process.env.PASSWORD || 'password123';
 
@@ -130,7 +130,9 @@ async function makeRequest(method, url, data = null) {
 
     try {
         const headers = {
-            'Authorization': authToken ? `Bearer ${authToken}` : ''
+            'Authorization': authToken ? `Bearer ${authToken}` : '',
+            'X-Skip-Rate-Limit': 'true', // Bypass rate limiting para tests
+            'User-Agent': 'NanoDB-stress-test/1.0'
         };
 
         if (data) {
