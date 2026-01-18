@@ -10,7 +10,8 @@
  * - Cache saturation
  */
 
-const API_URL = 'https://nanodb.on.shiper.app';
+// const API_URL = 'https://nanodb.on.shiper.app';
+const API_URL = 'http://localhost:3000';
 const EMAIL = process.env.EMAIL || 'admin@local.host';
 const PASSWORD = process.env.PASSWORD || 'password123';
 

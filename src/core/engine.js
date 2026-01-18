@@ -298,16 +298,8 @@ class Engine {
    * Garantiza consistencia ACID completa
    */
   async _atomicWrite(ops, cacheUpdates) {
-    // Usar transacción explícita de LMDB
-    await db.main.transaction(() => {
-      for (const op of ops) {
-        if (op.type === 'put') {
-          op.db.put(op.key, op.value);
-        } else if (op.type === 'del') {
-          op.db.remove(op.key);
-        }
-      }
-    });
+    // Ejecutar batch operation (transacción atómica en LMDB)
+    await db.root.batch(ops);
 
     // Solo actualizar caché DESPUÉS de commit exitoso
     for (const [key, value] of cacheUpdates) {
