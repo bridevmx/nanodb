@@ -1,11 +1,24 @@
 const fastify = require('fastify')({
   logger: {
     level: process.env.NODE_ENV === 'development' ? 'info' : 'error'
-  }
+  },
+  http2: true,
+  https: process.env.NODE_ENV === 'production' ? {
+    allowHTTP1: true // Permitir HTTP/1.1 como fallback
+  } : undefined,
+  keepAliveTimeout: 30000, // 30 segundos
+  requestTimeout: 60000 // 60 segundos
 });
 
 const routes = require('./api/routes');
 const bootstrap = require('./bootstrap');
+
+// Compresión de respuestas (gzip/deflate/brotli)
+fastify.register(require('@fastify/compress'), {
+  global: true,
+  threshold: 1024, // Comprimir respuestas > 1KB
+  encodings: ['gzip', 'deflate', 'br']
+});
 
 // CORS
 fastify.register(require('@fastify/cors'), {
@@ -14,6 +27,10 @@ fastify.register(require('@fastify/cors'), {
   allowedHeaders: ['Content-Type', 'Authorization'],
   credentials: true
 });
+
+// Rate Limiting Dinámico
+const { rateLimitMiddleware } = require('./middleware/rateLimit');
+fastify.addHook('onRequest', rateLimitMiddleware);
 
 // Routes
 fastify.register(routes);

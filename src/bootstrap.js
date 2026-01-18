@@ -56,6 +56,43 @@ async function bootstrap() {
     console.log('✅ System healthy. Admin user exists.');
   }
 
+  // Crear colección de sistema _rate_limits si no existe
+  try {
+    const rateLimitsCollection = await engine.get('_collections', '_rate_limits');
+
+    if (!rateLimitsCollection) {
+      console.log('⚙️  Creating _rate_limits system collection...');
+
+      // Crear colección
+      await engine.create('_collections', {
+        id: '_rate_limits',
+        name: '_rate_limits',
+        fields: [
+          { name: 'path', type: 'text', required: true },
+          { name: 'method', type: 'text', required: false },
+          { name: 'max', type: 'number', required: true },
+          { name: 'timeWindow', type: 'number', required: true },
+          { name: 'enabled', type: 'boolean', required: true },
+          { name: 'skipOnError', type: 'boolean', required: false }
+        ]
+      });
+
+      // Crear límite por defecto (100 requests/minuto global)
+      await engine.create('_rate_limits', {
+        path: '*',
+        method: '*',
+        max: 100,
+        timeWindow: 60000, // 1 minuto
+        enabled: false, // Deshabilitado por defecto
+        skipOnError: true
+      });
+
+      console.log('✅ Rate limits collection created');
+    }
+  } catch (error) {
+    console.warn('⚠️  Could not initialize rate limits:', error.message);
+  }
+
   const stats = db.cache.getStats();
   console.log(`📊 Cache initialized: ${stats.size}/${stats.maxSize} entries`);
 }
