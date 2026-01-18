@@ -1,0 +1,31 @@
+{
+  "name": "nanodb",
+  "version": "1.0.0",
+  "description": "Ultra-optimized Backend as a Service for low-resource VPS",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "node --watch src/index.js"
+  },
+  "keywords": [
+    "baas",
+    "database",
+    "backend",
+    "api",
+    "lmdb"
+  ],
+  "author": "NanoDB Team",
+  "license": "MIT",
+  "engines": {
+    "node": "20.x"
+  },
+  "dependencies": {
+    "@fastify/cors": "^11.2.0",
+    "@fastify/jwt": "^10.0.0",
+    "bcryptjs": "^3.0.3",
+    "fastify": "^5.7.1",
+    "jsonwebtoken": "^9.0.3",
+    "lmdb": "^3.4.4",
+    "nanoid": "^5.1.6"
+  }
+}
