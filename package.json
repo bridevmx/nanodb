@@ -5,7 +5,8 @@
   "main": "src/index.js",
   "scripts": {
     "start": "node src/index.js",
-    "dev": "node --watch src/index.js"
+    "dev": "node --watch src/index.js",
+    "build": "echo 'NanoDB: No build step required'"
   },
   "keywords": [
     "baas",
@@ -17,7 +18,7 @@
   "author": "NanoDB Team",
   "license": "MIT",
   "engines": {
-    "node": "20.x"
+    "node": ">=24.0.0"
   },
   "dependencies": {
     "@fastify/cors": "^11.2.0",
