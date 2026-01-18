@@ -424,19 +424,38 @@
         if (data) options.body = JSON.stringify(data);
         
         const response = await fetch(`${getApiUrl()}${url}`, options);
-        const result = await response.json();
         const latency = Date.now() - start;
         
         metrics.totalOps++;
         metrics.totalLatency += latency;
         metrics.endTime = Date.now();
         
+        // Handle successful responses (2xx status codes)
         if (response.ok) {
           metrics.successOps++;
-          return { success: true, data: result, latency };
+          
+          // Handle 204 No Content (common for DELETE/UPDATE)
+          if (response.status === 204) {
+            return { success: true, data: null, latency };
+          }
+          
+          // Try to parse JSON, but handle empty responses
+          try {
+            const result = await response.json();
+            return { success: true, data: result, latency };
+          } catch (e) {
+            // Response was ok but not JSON (e.g., empty body)
+            return { success: true, data: null, latency };
+          }
         } else {
+          // Handle error responses
           metrics.failedOps++;
-          return { success: false, error: result.error, latency };
+          try {
+            const result = await response.json();
+            return { success: false, error: result.error || result.message, latency };
+          } catch (e) {
+            return { success: false, error: `HTTP ${response.status}`, latency };
+          }
         }
       } catch (error) {
         metrics.totalOps++;

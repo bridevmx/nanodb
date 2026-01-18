@@ -1,4 +1,4 @@
-const fastify = require('fastify')({ 
+const fastify = require('fastify')({
   logger: {
     level: process.env.NODE_ENV === 'development' ? 'info' : 'error'
   }
@@ -8,8 +8,11 @@ const routes = require('./api/routes');
 const bootstrap = require('./bootstrap');
 
 // CORS
-fastify.register(require('@fastify/cors'), { 
-  origin: '*' 
+fastify.register(require('@fastify/cors'), {
+  origin: '*',
+  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization'],
+  credentials: true
 });
 
 // Routes
@@ -18,24 +21,24 @@ fastify.register(routes);
 // Error Handler
 fastify.setErrorHandler((error, request, reply) => {
   fastify.log.error(error);
-  
+
   if (error.message.includes('Forbidden')) {
     return reply.code(403).send({ error: error.message });
   }
-  
+
   if (error.message.includes('Validation failed')) {
     return reply.code(400).send({ error: error.message });
   }
-  
+
   if (error.message.includes('not found')) {
     return reply.code(404).send({ error: error.message });
   }
-  
+
   if (error.message.includes('must be unique')) {
     return reply.code(409).send({ error: error.message });
   }
-  
-  return reply.code(500).send({ 
+
+  return reply.code(500).send({
     error: 'Internal server error',
     message: process.env.NODE_ENV === 'development' ? error.message : undefined
   });
@@ -43,8 +46,8 @@ fastify.setErrorHandler((error, request, reply) => {
 
 // Health check
 fastify.get('/health', async (req, reply) => {
-  return { 
-    status: 'ok', 
+  return {
+    status: 'ok',
     uptime: process.uptime(),
     memory: process.memoryUsage()
   };
@@ -57,7 +60,7 @@ const start = async () => {
 
     const port = parseInt(process.env.PORT) || 3000;
     await fastify.listen({ port, host: '0.0.0.0' });
-    
+
     console.log('');
     console.log('╔═══════════════════════════════════════════════════════════╗');
     console.log('║                                                           ║');
