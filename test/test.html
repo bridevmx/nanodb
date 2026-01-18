@@ -321,15 +321,18 @@
         if (response.ok) {
           authToken = data.token;
           localStorage.setItem('nanodb_server_url', apiUrl);
+          console.log(`✅ Login OK → ${email} @ ${apiUrl}`);
           log('success', `✅ Logged in as ${email}`);
           log('info', `🌐 Server: ${apiUrl}`);
           document.getElementById('connectionStatus').className = 'inline-block w-2 h-2 rounded-full mr-2 bg-green-500 animate-pulse';
           fetchStats();
         } else {
+          console.error(`❌ Login FAIL → ${data.error}`);
           log('error', `❌ Login failed: ${data.error}`);
           document.getElementById('connectionStatus').className = 'inline-block w-2 h-2 rounded-full mr-2 bg-red-500';
         }
       } catch (error) {
+        console.error(`❌ Login ERROR → ${error.message}`);
         log('error', `❌ Connection error: ${error.message}`);
         document.getElementById('connectionStatus').className = 'inline-block w-2 h-2 rounded-full mr-2 bg-red-500';
       }
@@ -412,12 +415,18 @@
       const start = Date.now();
       
       try {
+        const headers = {
+          'Authorization': authToken ? `Bearer ${authToken}` : ''
+        };
+        
+        // Only set Content-Type if we have data
+        if (data) {
+          headers['Content-Type'] = 'application/json';
+        }
+        
         const options = {
           method,
-          headers: {
-            'Content-Type': 'application/json',
-            'Authorization': authToken ? `Bearer ${authToken}` : ''
-          },
+          headers,
           signal: AbortSignal.timeout(30000) // 30s timeout
         };
         
@@ -436,15 +445,19 @@
           
           // Handle 204 No Content (common for DELETE/UPDATE)
           if (response.status === 204) {
+            console.log(`✅ ${method} ${url} → 204 (${latency}ms)`);
             return { success: true, data: null, latency };
           }
           
           // Try to parse JSON, but handle empty responses
           try {
             const result = await response.json();
+            const idInfo = result.id ? ` ID:${result.id}` : '';
+            console.log(`✅ ${method} ${url} → ${response.status}${idInfo} (${latency}ms)`);
             return { success: true, data: result, latency };
           } catch (e) {
             // Response was ok but not JSON (e.g., empty body)
+            console.log(`✅ ${method} ${url} → ${response.status} (${latency}ms)`);
             return { success: true, data: null, latency };
           }
         } else {
@@ -452,8 +465,10 @@
           metrics.failedOps++;
           try {
             const result = await response.json();
+            console.error(`❌ ${method} ${url} → ${response.status} ${result.error || result.message} (${latency}ms)`);
             return { success: false, error: result.error || result.message, latency };
           } catch (e) {
+            console.error(`❌ ${method} ${url} → ${response.status} (${latency}ms)`);
             return { success: false, error: `HTTP ${response.status}`, latency };
           }
         }
@@ -463,6 +478,7 @@
         const latency = Date.now() - start;
         metrics.totalLatency += latency;
         metrics.endTime = Date.now();
+        console.error(`❌ ${method} ${url} → ${error.message} (${latency}ms)`);
         return { success: false, error: error.message, latency };
       }
     }
@@ -507,6 +523,7 @@
       const config = intensityConfig[currentIntensity];
       const maxConcurrent = config.concurrent;
       
+      console.log(`🚀 CRUD START → ${config.operations} ops, ${maxConcurrent} concurrent, ${currentIntensity} intensity`);
       log('info', `🚀 CRUD Test: ${config.operations} ops, max ${maxConcurrent} concurrent`);
       resetMetrics();
       

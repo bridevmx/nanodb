@@ -6,42 +6,42 @@ const indexer = require('./indexer');
 const MAX_SCAN_LIMIT = parseInt(process.env.MAX_SCAN_LIMIT) || 100;
 
 class Engine {
-  
+
   async get(collection, id) {
     const key = `${collection}:${id}`;
-    
+
     // 1. Intentar cache primero
     let data = db.cache.get(key);
-    
+
     // 2. Si no está en cache, leer de disco
     if (!data) {
       data = db.main.get(key);
       if (data) db.cache.set(key, data);
     }
-    
+
     return this._sanitize(collection, data);
   }
 
   async list(collection, options = {}) {
     const { filter = {}, sort, page = 1, perPage = 30 } = options;
     const schema = schemaManager.get(collection);
-    
+
     let candidateIds = null;
-    
+
     // Buscar campo indexado en los filtros
-    const indexedField = schema?.fields.find(f => 
+    const indexedField = schema?.fields.find(f =>
       f.indexed && filter[f.name] !== undefined
     );
-    
+
     if (indexedField) {
       // Búsqueda indexada (O(1))
       candidateIds = [];
       const val = filter[indexedField.name];
       const prefix = `idx:${collection}:${indexedField.name}:${val}:`;
-      
-      for (const { value } of db.indexes.getRange({ 
-        start: prefix, 
-        end: prefix + '\xFF' 
+
+      for (const { value } of db.indexes.getRange({
+        start: prefix,
+        end: prefix + '\xFF'
       })) {
         candidateIds.push(value);
       }
@@ -50,15 +50,15 @@ class Engine {
       candidateIds = [];
       const prefix = `${collection}:`;
       let scanned = 0;
-      
-      for (const { key } of db.main.getRange({ 
-        start: prefix, 
-        end: prefix + '\xFF' 
+
+      for (const { key } of db.main.getRange({
+        start: prefix,
+        end: prefix + '\xFF'
       })) {
         candidateIds.push(key.split(':')[1]);
         if (++scanned >= MAX_SCAN_LIMIT) break;
       }
-      
+
       if (scanned >= MAX_SCAN_LIMIT) {
         console.warn(
           `Warning: Query on '${collection}' hit scan limit of ${MAX_SCAN_LIMIT}. ` +
@@ -72,12 +72,12 @@ class Engine {
       .map(id => {
         const key = `${collection}:${id}`;
         let data = db.cache.get(key);
-        
+
         if (!data) {
           data = db.main.get(key);
           if (data) db.cache.set(key, data);
         }
-        
+
         return data;
       })
       .filter(r => r);
@@ -119,10 +119,10 @@ class Engine {
 
   async create(collection, data) {
     const schema = schemaManager.get(collection);
-    
+
     // Validar esquema
     schemaManager.validate(collection, data);
-    
+
     const id = nanoid(15);
     const now = new Date().toISOString();
     const record = { ...data, id, created: now, updated: now };
@@ -134,7 +134,7 @@ class Engine {
     const ops = [
       { type: 'put', key: `${collection}:${id}`, value: record, db: db.main }
     ];
-    
+
     const indexOps = indexer.getBatchOperations(collection, id, record, null, schema);
     ops.push(...indexOps);
 
@@ -153,19 +153,21 @@ class Engine {
 
   async update(collection, id, data) {
     const key = `${collection}:${id}`;
-    const oldRecord = db.main.get(key);
+
+    // Use get() to check cache first
+    const oldRecord = await this.get(collection, id);
 
     if (!oldRecord) throw new Error('Record not found');
 
     const schema = schemaManager.get(collection);
     const now = new Date().toISOString();
-    
-    const newRecord = { 
-      ...oldRecord, 
-      ...data, 
-      id, 
-      updated: now, 
-      created: oldRecord.created 
+
+    const newRecord = {
+      ...oldRecord,
+      ...data,
+      id,
+      updated: now,
+      created: oldRecord.created
     };
 
     // Validar esquema
@@ -179,10 +181,10 @@ class Engine {
     ];
 
     const indexOps = indexer.getBatchOperations(
-      collection, 
-      id, 
-      newRecord, 
-      oldRecord, 
+      collection,
+      id,
+      newRecord,
+      oldRecord,
       schema
     );
     ops.push(...indexOps);
@@ -200,7 +202,9 @@ class Engine {
 
   async delete(collection, id) {
     const key = `${collection}:${id}`;
-    const oldRecord = db.main.get(key);
+
+    // Use get() to check cache first
+    const oldRecord = await this.get(collection, id);
 
     if (!oldRecord) throw new Error('Record not found');
 
@@ -211,10 +215,10 @@ class Engine {
     ];
 
     const indexOps = indexer.getBatchOperations(
-      collection, 
-      id, 
-      null, 
-      oldRecord, 
+      collection,
+      id,
+      null,
+      oldRecord,
       schema
     );
     ops.push(...indexOps);
@@ -232,16 +236,16 @@ class Engine {
 
   _sanitize(collection, data) {
     if (!data) return null;
-    
+
     const schema = schemaManager.get(collection);
     if (!schema) return data;
 
     const clean = { ...data };
-    
+
     schema.fields.forEach(f => {
       if (f.private) delete clean[f.name];
     });
-    
+
     return clean;
   }
 }
