@@ -161,10 +161,10 @@ let writeBufferInstance = null;
 module.exports = {
     getWriteBuffer: (options) => {
         if (!writeBufferInstance) {
-            // Ignorar opciones viejas, forzar tuning agresivo
+            // ✅ CORREGIDO: Usar opciones pasadas o defaults del Golden Ratio
             writeBufferInstance = new WriteBuffer({
-                flushInterval: 30,    // ⚡ AJUSTE FINAL: 30ms (Balance Throughput/Latencia)
-                maxBufferSize: 2000   // Gran capacidad
+                flushInterval: options?.flushInterval || 30,    // ⚡ Golden Ratio: 30ms
+                maxBufferSize: options?.maxBufferSize || 2000   // Buffer grande para agrupar
             });
         }
         return writeBufferInstance;

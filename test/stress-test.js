@@ -8,12 +8,22 @@
  * - Sustained high throughput
  * - Memory pressure
  * - Cache saturation
+ * - VPS CPU/RAM monitoring
  */
+
+require('dotenv').config();
+const fs = require('fs');
+const path = require('path');
 
 const API_URL = 'https://nanodb.on.shiper.app';
 // const API_URL = 'http://localhost:3000';
 const EMAIL = process.env.EMAIL || 'admin@local.host';
 const PASSWORD = process.env.PASSWORD || 'password123';
+
+// VPS Monitoring
+const VPS_TOKEN = process.env.VPSTOKEN;
+const PROJECT_ID = 'cmkj2z83s000aeri1jn4bdt3k';
+const DEPLOYMENT_ID = 'cmkj2z858000deri1e19v35g2';
 
 let authToken = null;
 
@@ -61,8 +71,51 @@ const metrics = {
     maxLatency: 0,
     errors: {},
     startTime: null,
-    endTime: null
+    endTime: null,
+    vpsMetrics: {
+        start: null,
+        mid: null,
+        end: null
+    }
 };
+
+// ═══════════════════════════════════════════════════════════════════════
+// VPS MONITORING
+// ═══════════════════════════════════════════════════════════════════════
+
+async function getVPSMetrics() {
+    if (!VPS_TOKEN) return null;
+
+    try {
+        const [cpuResponse, memoryResponse] = await Promise.all([
+            fetch(`https://shiper.app/api/project/${PROJECT_ID}/analytics/${DEPLOYMENT_ID}/cpu`, {
+                headers: { 'cookie': `token=${VPS_TOKEN}`, 'accept': 'application/json' }
+            }),
+            fetch(`https://shiper.app/api/project/${PROJECT_ID}/analytics/${DEPLOYMENT_ID}/memory`, {
+                headers: { 'cookie': `token=${VPS_TOKEN}`, 'accept': 'application/json' }
+            })
+        ]);
+
+        const cpuData = await cpuResponse.json();
+        const memoryData = await memoryResponse.json();
+
+        const latestCPU = cpuData.values?.[cpuData.values.length - 1];
+        const latestMemory = memoryData.values?.[memoryData.values.length - 1];
+
+        return {
+            cpu: latestCPU?.value || 0,
+            memory: latestMemory?.value || 0,
+            timestamp: Date.now()
+        };
+    } catch (error) {
+        return null;
+    }
+}
+
+function formatVPSMetrics(m) {
+    if (!m) return 'N/A';
+    return `CPU: ${m.cpu.toFixed(1)}% | RAM: ${m.memory.toFixed(1)}%`;
+}
 
 // ═══════════════════════════════════════════════════════════════════════
 // UTILITIES
@@ -91,6 +144,7 @@ function resetMetrics() {
     metrics.errors = {};
     metrics.startTime = Date.now();
     metrics.endTime = null;
+    metrics.vpsMetrics = { start: null, mid: null, end: null };
 }
 
 function printMetrics() {
@@ -99,26 +153,53 @@ function printMetrics() {
     const throughput = duration > 0 ? (metrics.totalOps / duration).toFixed(2) : 0;
     const successRate = metrics.totalOps > 0 ? ((metrics.successOps / metrics.totalOps) * 100).toFixed(2) : 0;
 
-    console.log('\n' + '═'.repeat(70));
-    console.log('📊 METRICS SUMMARY');
-    console.log('═'.repeat(70));
-    console.log(`Duration:        ${duration.toFixed(2)}s`);
-    console.log(`Total Ops:       ${metrics.totalOps}`);
-    console.log(`Success:         ${metrics.successOps} (${successRate}%)`);
-    console.log(`Failed:          ${metrics.failedOps}`);
-    console.log(`Throughput:      ${throughput} ops/s`);
-    console.log(`Avg Latency:     ${avgLatency}ms`);
-    console.log(`Min Latency:     ${metrics.minLatency === Infinity ? 0 : metrics.minLatency}ms`);
-    console.log(`Max Latency:     ${metrics.maxLatency}ms`);
+    // Construir reporte
+    let report = '';
+    report += '\n' + '═'.repeat(70) + '\n';
+    report += '📊 METRICS SUMMARY\n';
+    report += '═'.repeat(70) + '\n';
+    report += `Duration:        ${duration.toFixed(2)}s\n`;
+    report += `Total Ops:       ${metrics.totalOps}\n`;
+    report += `Success:         ${metrics.successOps} (${successRate}%)\n`;
+    report += `Failed:          ${metrics.failedOps}\n`;
+    report += `Throughput:      ${throughput} ops/s\n`;
+    report += `Avg Latency:     ${avgLatency}ms\n`;
+    report += `Min Latency:     ${metrics.minLatency === Infinity ? 0 : metrics.minLatency}ms\n`;
+    report += `Max Latency:     ${metrics.maxLatency}ms\n`;
+
+    // VPS Metrics
+    if (metrics.vpsMetrics.start || metrics.vpsMetrics.end) {
+        report += '\n' + '─'.repeat(70) + '\n';
+        report += '📈 VPS METRICS\n';
+        report += '─'.repeat(70) + '\n';
+        report += `Start:           ${formatVPSMetrics(metrics.vpsMetrics.start)}\n`;
+        if (metrics.vpsMetrics.mid) {
+            report += `Mid:             ${formatVPSMetrics(metrics.vpsMetrics.mid)}\n`;
+        }
+        report += `End:             ${formatVPSMetrics(metrics.vpsMetrics.end)}\n`;
+
+        // Tendencia
+        if (metrics.vpsMetrics.start && metrics.vpsMetrics.end) {
+            const cpuDelta = metrics.vpsMetrics.end.cpu - metrics.vpsMetrics.start.cpu;
+            const ramDelta = metrics.vpsMetrics.end.memory - metrics.vpsMetrics.start.memory;
+            report += `Trend:           CPU ${cpuDelta > 0 ? '+' : ''}${cpuDelta.toFixed(1)}% | RAM ${ramDelta > 0 ? '+' : ''}${ramDelta.toFixed(1)}%\n`;
+        }
+    }
 
     if (Object.keys(metrics.errors).length > 0) {
-        console.log('\n🔴 ERRORS:');
+        report += '\n🔴 ERRORS:\n';
         Object.entries(metrics.errors).forEach(([error, count]) => {
-            console.log(`  ${error}: ${count}`);
+            report += `  ${error}: ${count}\n`;
         });
     }
 
-    console.log('═'.repeat(70) + '\n');
+    report += '═'.repeat(70) + '\n';
+
+    // Guardar en archivo
+    const outputPath = path.join(__dirname, 'metrics.llm.txt');
+    fs.writeFileSync(outputPath, report, 'utf8');
+
+    console.log(`\n✅ Métricas guardadas en: ${outputPath}`);
 }
 
 // ═══════════════════════════════════════════════════════════════════════
@@ -132,7 +213,7 @@ async function makeRequest(method, url, data = null) {
         const headers = {
             'Authorization': authToken ? `Bearer ${authToken}` : '',
             'X-Skip-Rate-Limit': 'true', // Bypass rate limiting para tests
-            'User-Agent': 'NanoDB-stress-test/1.0'
+            'User-Agent': 'stress-test'
         };
 
         if (data) {
@@ -249,14 +330,22 @@ async function login() {
 // ═══════════════════════════════════════════════════════════════════════
 
 async function stressCRUD(config) {
-    log('info', `🚀 Starting ${config.name}: ${config.operations} ops, ${config.concurrent} concurrent`);
+    console.log(`\n🚀 ${config.name}: ${config.operations} ops, ${config.concurrent} concurrent`);
     resetMetrics();
 
+    // Capturar métricas VPS al inicio (sin mostrar)
+    metrics.vpsMetrics.start = await getVPSMetrics();
+
     const pool = new ConcurrencyPool(config.concurrent);
+
+    // Programar captura de métricas a mitad del test
+    const midCaptureTimeout = setTimeout(async () => {
+        metrics.vpsMetrics.mid = await getVPSMetrics();
+    }, (config.operations / config.concurrent) * 500);
     const createdIds = [];
 
     // CREATE
-    log('info', `📝 Creating ${config.operations} records...`);
+    console.log(`📝 Creating ${config.operations} records...`);
     const createPromises = [];
 
     for (let i = 0; i < config.operations; i++) {
@@ -326,9 +415,13 @@ async function stressCRUD(config) {
     }
 
     await Promise.all(deletePromises);
-    log('success', `✅ Delete complete`);
+    console.log(`✅ Delete complete`);
 
+    // Capturar métricas VPS al final (sin mostrar)
+    clearTimeout(midCaptureTimeout);
     metrics.endTime = Date.now();
+    metrics.vpsMetrics.end = await getVPSMetrics();
+
     printMetrics();
 }
 
