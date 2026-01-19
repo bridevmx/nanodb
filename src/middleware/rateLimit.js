@@ -9,14 +9,12 @@
  * - Compatible con normas RFC 6585
  */
 
-const LRUCache = require('lru-cache');
-
 // ═══════════════════════════════════════════════════════════════════════
 // CONFIGURACIÓN
 // ═══════════════════════════════════════════════════════════════════════
 
 const rateLimitStore = new Map(); // IP tracking
-const configCache = new LRUCache({ max: 500, ttl: 30000 }); // 30s TTL
+const configCache = new Map();    // Configuración (reemplaza LRU)
 let lastConfigReload = 0;
 const RELOAD_INTERVAL = 30000; // 30 segundos
 
