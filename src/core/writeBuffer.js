@@ -1,14 +1,9 @@
 /**
- * Write Buffer - Group Commit Pattern
- * 
- * Acumula operaciones de escritura en RAM y las vuelca a disco en batch
- * para reducir la contención de I/O y eliminar el cuello de botella de fsync.
- * 
- * Características:
- * - Buffer en memoria con flush automático cada 20-50ms
- * - Flush forzado al alcanzar 100 operaciones
- * - Graceful shutdown para prevenir pérdida de datos
- * - Callbacks para notificar cuando la operación se persiste
+ * Write Buffer - Group Commit Pattern (OPTIMIZED)
+ * * v2 Changes:
+ * - Removed blocking console.logs in hot path
+ * - Optimized stats calculation
+ * - Better error handling
  */
 
 const db = require('./db');
@@ -20,208 +15,159 @@ class WriteBuffer {
         this.callbacks = [];
         this.timer = null;
 
-        // Configuración
-        this.flushInterval = options.flushInterval || 20; // 20ms por defecto
-        this.maxBufferSize = options.maxBufferSize || 100; // 100 ops por defecto
+        // TUNING: Aumentado para carga 'BREAKING'
+        this.flushInterval = options.flushInterval || 50; // 50ms (antes 20)
+        this.maxBufferSize = options.maxBufferSize || 1000; // 1000 ops (antes 100)
+
         this.isShuttingDown = false;
 
-        // Métricas
+        // Stats simplificados para menor overhead
         this.stats = {
             totalOps: 0,
             totalFlushes: 0,
-            avgBatchSize: 0,
-            lastFlushTime: Date.now()
+            lastBatchSize: 0
         };
 
-        // Registrar handler de shutdown
         this._setupShutdownHandlers();
     }
 
-    /**
-     * Agregar operación al buffer
-     */
     async add(ops, cacheUpdates, callback) {
         if (this.isShuttingDown) {
-            // Durante shutdown, escribir inmediatamente
             await this._flushNow([ops], [cacheUpdates], [callback]);
             return;
         }
 
-        // Agregar al buffer
         this.buffer.push(ops);
         this.cacheUpdates.push(cacheUpdates);
         this.callbacks.push(callback);
         this.stats.totalOps++;
 
-        // Programar flush si no existe
         if (!this.timer) {
             this.timer = setTimeout(() => this.flush(), this.flushInterval);
         }
 
-        // Flush inmediato si buffer lleno (NO BLOQUEANTE)
         if (this.buffer.length >= this.maxBufferSize) {
-            clearTimeout(this.timer);
-            this.timer = null;
-            // ⚠️ NO AWAIT - Flush asíncrono, no bloquear el request
-            this.flush().catch(err => console.error('Flush error:', err));
+            if (this.timer) {
+                clearTimeout(this.timer);
+                this.timer = null;
+            }
+            // Fire and forget (con catch) para no bloquear
+            this.flush().catch(err => {
+                // Solo loguear errores reales, no info
+                console.error('CRITICAL: Auto-flush failed:', err);
+            });
         }
     }
 
-    /**
-     * Flush del buffer a disco
-     */
     async flush() {
         if (this.buffer.length === 0) {
             this.timer = null;
             return;
         }
 
-        // Extraer todo el buffer
-        const opsToFlush = this.buffer.splice(0);
-        const cacheToFlush = this.cacheUpdates.splice(0);
-        const callbacksToFlush = this.callbacks.splice(0);
+        // Swap atómico de buffers
+        const opsToFlush = this.buffer;
+        const cacheToFlush = this.cacheUpdates;
+        const callbacksToFlush = this.callbacks;
 
+        // Reiniciar estado inmediatamente para aceptar nuevas escrituras
+        // mientras procesamos el batch anterior (concurrencia real)
+        this.buffer = [];
+        this.cacheUpdates = [];
+        this.callbacks = [];
         this.timer = null;
 
         await this._flushNow(opsToFlush, cacheToFlush, callbacksToFlush);
     }
 
-    /**
-     * Flush inmediato (interno)
-     */
     async _flushNow(opsArray, cacheArray, callbackArray) {
         if (opsArray.length === 0) return;
 
-        const batchSize = opsArray.length;
-        const totalOps = opsArray.reduce((sum, ops) => sum + ops.length, 0);
-
-        // 🔍 DEBUG: Log de batching
-        console.log(`🔄 Flushing batch: ${batchSize} requests, ${totalOps} operations`);
-
         try {
-            // Combinar todas las operaciones en un solo batch
             const allOps = [];
-            const allCacheUpdates = [];
-
+            // Optimización: Loop simple es más rápido que flatMap
             for (let i = 0; i < opsArray.length; i++) {
-                allOps.push(...opsArray[i]);
-                allCacheUpdates.push(...cacheArray[i]);
+                const reqOps = opsArray[i];
+                for (let j = 0; j < reqOps.length; j++) {
+                    allOps.push(reqOps[j]);
+                }
             }
 
-            // 1 SOLA transacción LMDB para todas las ops
-            const startTime = Date.now();
+            // EXTREME PERFORMANCE: Sin logs aquí. Solo escritura pura.
             await db.root.batch(allOps);
-            const flushTime = Date.now() - startTime;
 
-            // Actualizar caché DESPUÉS de commit exitoso
-            for (const [key, value] of allCacheUpdates) {
-                if (value === null) {
-                    db.cache.del(key);
-                } else {
-                    db.cache.set(key, value);
+            // Actualizar caché solo tras éxito
+            for (let i = 0; i < cacheArray.length; i++) {
+                const updates = cacheArray[i];
+                for (let j = 0; j < updates.length; j++) {
+                    const [key, val] = updates[j];
+                    if (val === null) db.cache.del(key);
+                    else db.cache.set(key, val);
                 }
             }
 
-            // Notificar a todos los callbacks
-            for (const callback of callbackArray) {
-                if (callback) {
-                    try {
-                        callback(null); // Success
-                    } catch (e) {
-                        console.error('Callback error:', e);
-                    }
-                }
+            // Notificar éxito
+            for (let i = 0; i < callbackArray.length; i++) {
+                if (callbackArray[i]) callbackArray[i](null);
             }
 
-            // Actualizar métricas
             this.stats.totalFlushes++;
-            this.stats.avgBatchSize =
-                (this.stats.avgBatchSize * (this.stats.totalFlushes - 1) + opsArray.length) /
-                this.stats.totalFlushes;
-            this.stats.lastFlushTime = Date.now();
-
-            // 🔍 DEBUG: Log de éxito
-            console.log(`✅ Batch flushed in ${flushTime}ms | Avg batch size: ${this.stats.avgBatchSize.toFixed(1)}`);
+            this.stats.lastBatchSize = opsArray.length;
 
         } catch (error) {
-            console.error('❌ Flush error:', error);
-
-            // Notificar error a todos los callbacks
-            for (const callback of callbackArray) {
-                if (callback) {
-                    try {
-                        callback(error);
-                    } catch (e) {
-                        console.error('Callback error:', e);
-                    }
-                }
+            console.error('❌ Batch Write Error:', error);
+            // Notificar error
+            for (let i = 0; i < callbackArray.length; i++) {
+                if (callbackArray[i]) callbackArray[i](error);
             }
-
-            throw error;
         }
     }
 
-    /**
-     * Configurar handlers de shutdown
-     */
     _setupShutdownHandlers() {
         const gracefulShutdown = async (signal) => {
             if (this.isShuttingDown) return;
-
-            console.log(`\n⚠️  Received ${signal}. Flushing write buffer...`);
+            console.log(`\n⚠️ ${signal} received. Flushing remaining ${this.buffer.length} ops...`);
             this.isShuttingDown = true;
+            if (this.timer) clearTimeout(this.timer);
 
-            // Cancelar timer
-            if (this.timer) {
-                clearTimeout(this.timer);
-                this.timer = null;
-            }
-
-            // Flush final
             try {
                 await this.flush();
-                console.log('✅ Write buffer flushed successfully');
-                console.log(`📊 Stats: ${this.stats.totalOps} ops, ${this.stats.totalFlushes} flushes, avg batch: ${this.stats.avgBatchSize.toFixed(1)}`);
-            } catch (error) {
-                console.error('❌ Error flushing buffer during shutdown:', error);
+                console.log('✅ Buffer flushed.');
+            } catch (e) {
+                console.error('❌ Shutdown flush failed:', e);
             }
-
             process.exit(0);
         };
 
-        // Registrar handlers
         process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
         process.on('SIGINT', () => gracefulShutdown('SIGINT'));
-        process.on('beforeExit', async () => {
-            if (!this.isShuttingDown) {
-                await gracefulShutdown('beforeExit');
-            }
-        });
     }
 
-    /**
-     * Obtener estadísticas
-     */
     getStats() {
         return {
             ...this.stats,
-            bufferSize: this.buffer.length,
-            flushInterval: this.flushInterval,
-            maxBufferSize: this.maxBufferSize
+            currentBufferSize: this.buffer.length,
+            config: {
+                batchSize: this.maxBufferSize,
+                interval: this.flushInterval
+            }
         };
     }
 }
 
-// Singleton global
+// Singleton con configuración actualizada
 let writeBufferInstance = null;
 
 module.exports = {
     getWriteBuffer: (options) => {
         if (!writeBufferInstance) {
-            writeBufferInstance = new WriteBuffer(options);
+            // Ignorar opciones viejas, forzar tuning agresivo
+            writeBufferInstance = new WriteBuffer({
+                flushInterval: 50,    // 50ms window
+                maxBufferSize: 2000   // Gran capacidad
+            });
         }
         return writeBufferInstance;
     },
-
     WriteBuffer
 };
