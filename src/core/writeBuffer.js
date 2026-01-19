@@ -58,11 +58,12 @@ class WriteBuffer {
             this.timer = setTimeout(() => this.flush(), this.flushInterval);
         }
 
-        // Flush inmediato si buffer lleno
+        // Flush inmediato si buffer lleno (NO BLOQUEANTE)
         if (this.buffer.length >= this.maxBufferSize) {
             clearTimeout(this.timer);
             this.timer = null;
-            await this.flush();
+            // ⚠️ NO AWAIT - Flush asíncrono, no bloquear el request
+            this.flush().catch(err => console.error('Flush error:', err));
         }
     }
 
@@ -91,6 +92,12 @@ class WriteBuffer {
     async _flushNow(opsArray, cacheArray, callbackArray) {
         if (opsArray.length === 0) return;
 
+        const batchSize = opsArray.length;
+        const totalOps = opsArray.reduce((sum, ops) => sum + ops.length, 0);
+
+        // 🔍 DEBUG: Log de batching
+        console.log(`🔄 Flushing batch: ${batchSize} requests, ${totalOps} operations`);
+
         try {
             // Combinar todas las operaciones en un solo batch
             const allOps = [];
@@ -102,7 +109,9 @@ class WriteBuffer {
             }
 
             // 1 SOLA transacción LMDB para todas las ops
+            const startTime = Date.now();
             await db.root.batch(allOps);
+            const flushTime = Date.now() - startTime;
 
             // Actualizar caché DESPUÉS de commit exitoso
             for (const [key, value] of allCacheUpdates) {
@@ -130,6 +139,9 @@ class WriteBuffer {
                 (this.stats.avgBatchSize * (this.stats.totalFlushes - 1) + opsArray.length) /
                 this.stats.totalFlushes;
             this.stats.lastFlushTime = Date.now();
+
+            // 🔍 DEBUG: Log de éxito
+            console.log(`✅ Batch flushed in ${flushTime}ms | Avg batch size: ${this.stats.avgBatchSize.toFixed(1)}`);
 
         } catch (error) {
             console.error('❌ Flush error:', error);
