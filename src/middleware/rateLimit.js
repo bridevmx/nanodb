@@ -1,91 +1,68 @@
 /**
- * Rate Limiting Middleware - Dinámico y configurable via API
+ * Rate Limiter Optimizado - BAAS Compatible
  * 
- * Usa una colección de sistema (_rate_limits) para configurar límites
- * por ruta, método, o usuario de forma dinámica.
+ * Características:
+ * - Configuración dinámica desde colección _rate_limits
+ * - Cero async en hot path (ultra rápido)
+ * - Reload automático cada 30s
+ * - Memory leak protection
+ * - Compatible con normas RFC 6585
  */
 
-const engine = require('../core/engine');
+const LRUCache = require('lru-cache');
 
-// Cache en memoria para evitar consultas constantes a BD
-let rateLimitsCache = new Map();
-let lastCacheUpdate = 0;
-const CACHE_TTL = 60000; // 1 minuto
+// ═══════════════════════════════════════════════════════════════════════
+// CONFIGURACIÓN
+// ═══════════════════════════════════════════════════════════════════════
 
-/**
- * Cargar límites de rate desde la colección _rate_limits
- */
-async function loadRateLimits() {
+const rateLimitStore = new Map(); // IP tracking
+const configCache = new LRUCache({ max: 500, ttl: 30000 }); // 30s TTL
+let lastConfigReload = 0;
+const RELOAD_INTERVAL = 30000; // 30 segundos
+
+// ═══════════════════════════════════════════════════════════════════════
+// CARGA DE CONFIGURACIÓN (BACKGROUND)
+// ═══════════════════════════════════════════════════════════════════════
+
+async function reloadRateLimitConfig() {
     const now = Date.now();
 
-    // Usar caché si es reciente
-    if (now - lastCacheUpdate < CACHE_TTL && rateLimitsCache.size > 0) {
-        return rateLimitsCache;
-    }
+    // Solo recargar cada 30s
+    if (now - lastConfigReload < RELOAD_INTERVAL) return;
+    lastConfigReload = now;
 
     try {
-        const limits = await engine.list('_rate_limits', { perPage: 1000 });
+        const engine = require('../core/engine');
+        const result = await engine.list('_rate_limits', {
+            perPage: 1000 // Cargar todas las reglas
+        });
 
-        rateLimitsCache.clear();
-
-        for (const limit of limits.items) {
-            if (limit.enabled) {
-                const key = `${limit.method || '*'}:${limit.path || '*'}`;
-                rateLimitsCache.set(key, {
-                    max: limit.max || 100,
-                    timeWindow: limit.timeWindow || 60000, // 1 minuto por defecto
-                    skipOnError: limit.skipOnError !== false
-                });
-            }
+        // Pre-poblar caché
+        configCache.clear();
+        for (const rule of result.items) {
+            const key = `${rule.method}:${rule.path}`;
+            configCache.set(key, {
+                max: rule.max || 100,
+                timeWindow: rule.timeWindow || 60000
+            });
         }
 
-        lastCacheUpdate = now;
+        console.log(`✅ Rate limit config reloaded: ${result.items.length} rules`);
     } catch (error) {
-        console.warn('⚠️  No se pudo cargar rate limits:', error.message);
+        console.error('❌ Failed to reload rate limit config:', error.message);
     }
-
-    return rateLimitsCache;
 }
 
-/**
- * Obtener configuración de rate limit para una ruta específica
- */
-async function getRateLimitConfig(method, path) {
-    await loadRateLimits();
+// Iniciar reload en background
+setInterval(reloadRateLimitConfig, RELOAD_INTERVAL);
+reloadRateLimitConfig(); // Carga inicial
 
-    // Buscar coincidencia exacta primero
-    const exactKey = `${method}:${path}`;
-    if (rateLimitsCache.has(exactKey)) {
-        return rateLimitsCache.get(exactKey);
-    }
+// ═══════════════════════════════════════════════════════════════════════
+// MIDDLEWARE (HOT PATH - ULTRA RÁPIDO)
+// ═══════════════════════════════════════════════════════════════════════
 
-    // Buscar por método wildcard
-    const methodWildcard = `${method}:*`;
-    if (rateLimitsCache.has(methodWildcard)) {
-        return rateLimitsCache.get(methodWildcard);
-    }
-
-    // Buscar por path wildcard
-    const pathWildcard = `*:${path}`;
-    if (rateLimitsCache.has(pathWildcard)) {
-        return rateLimitsCache.get(pathWildcard);
-    }
-
-    // Buscar wildcard total
-    if (rateLimitsCache.has('*:*')) {
-        return rateLimitsCache.get('*:*');
-    }
-
-    // Sin límite configurado
-    return null;
-}
-
-/**
- * Middleware de rate limiting
- */
-async function rateLimitMiddleware(request, reply) {
-    // ⚡ FASTEST BAIL-OUT: Chequeo de header optimizado
-    // Evitar split strings o lookups si es un test de carga autorizado
+function rateLimitMiddleware(request, reply) {
+    // ⚡ Early bail-out (sin async)
     if (request.headers['x-skip-rate-limit'] === 'true') {
         return;
     }
@@ -97,52 +74,33 @@ async function rateLimitMiddleware(request, reply) {
     }
 
     const method = request.method;
-    const path = request.url.split('?')[0]; // Sin query params
+    const path = request.url.split('?')[0];
+    const ip = request.ip || 'unknown';
 
-    const config = await getRateLimitConfig(method, path);
+    // ⚡ Lookup en caché (SÍNCRONO - sin await)
+    const configKey = `${method}:${path}`;
+    const config = configCache.get(configKey);
 
-    if (!config) {
-        return; // Sin límite configurado
-    }
+    // Si no hay config, permitir (fail-open para performance)
+    if (!config) return;
 
-    // Implementar rate limiting simple en memoria
-    // (En producción, usar Redis para distribuir entre instancias)
-    const clientId = request.ip || 'unknown';
-    const key = `${clientId}:${method}:${path}`;
-
-    if (!global.rateLimitStore) {
-        global.rateLimitStore = new Map();
-    }
-
+    // ⚡ Rate limiting simple
+    const key = `${ip}:${configKey}`;
     const now = Date.now();
-    const record = global.rateLimitStore.get(key);
+    const record = rateLimitStore.get(key);
 
-    if (!record) {
-        // Primera petición
-        global.rateLimitStore.set(key, {
+    if (!record || now > record.resetTime) {
+        rateLimitStore.set(key, {
             count: 1,
             resetTime: now + config.timeWindow
         });
         return;
     }
 
-    // Verificar si la ventana expiró
-    if (now > record.resetTime) {
-        // Reset
-        global.rateLimitStore.set(key, {
-            count: 1,
-            resetTime: now + config.timeWindow
-        });
-        return;
-    }
-
-    // Incrementar contador
     record.count++;
 
     if (record.count > config.max) {
-        // Límite excedido
         const retryAfter = Math.ceil((record.resetTime - now) / 1000);
-
         reply.header('Retry-After', retryAfter);
         reply.header('X-RateLimit-Limit', config.max);
         reply.header('X-RateLimit-Remaining', 0);
@@ -155,28 +113,37 @@ async function rateLimitMiddleware(request, reply) {
         });
     }
 
-    // Agregar headers informativos
+    // Headers informativos
     reply.header('X-RateLimit-Limit', config.max);
     reply.header('X-RateLimit-Remaining', config.max - record.count);
     reply.header('X-RateLimit-Reset', record.resetTime);
 }
 
-/**
- * Limpiar registros expirados periódicamente
- */
-setInterval(() => {
-    if (!global.rateLimitStore) return;
+// ═══════════════════════════════════════════════════════════════════════
+// LIMPIEZA PERIÓDICA (EVITAR MEMORY LEAK)
+// ═══════════════════════════════════════════════════════════════════════
 
+setInterval(() => {
     const now = Date.now();
-    for (const [key, record] of global.rateLimitStore.entries()) {
-        if (now > record.resetTime) {
-            global.rateLimitStore.delete(key);
+    let cleaned = 0;
+
+    for (const [key, record] of rateLimitStore.entries()) {
+        if (now > record.resetTime + 60000) { // 1 min después de expirar
+            rateLimitStore.delete(key);
+            cleaned++;
         }
+    }
+
+    if (cleaned > 0) {
+        console.log(`🧹 Cleaned ${cleaned} expired rate limit entries`);
     }
 }, 60000); // Cada minuto
 
+// ═══════════════════════════════════════════════════════════════════════
+// EXPORTS
+// ═══════════════════════════════════════════════════════════════════════
+
 module.exports = {
     rateLimitMiddleware,
-    loadRateLimits,
-    getRateLimitConfig
+    reloadRateLimitConfig // Para forzar reload manual si es necesario
 };

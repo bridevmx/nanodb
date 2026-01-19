@@ -15,11 +15,11 @@ const routes = require('./api/routes');
 const bootstrap = require('./bootstrap');
 
 // Compresión de respuestas (gzip/deflate/brotli)
-fastify.register(require('@fastify/compress'), {
-  global: true,
-  threshold: 1024, // Comprimir respuestas > 1KB
-  encodings: ['gzip', 'deflate', 'br']
-});
+// fastify.register(require('@fastify/compress'), {
+//   global: true,
+//   threshold: 1024, // Comprimir respuestas > 1KB
+//   encodings: ['gzip', 'deflate', 'br']
+// });
 
 // CORS
 fastify.register(require('@fastify/cors'), {
@@ -29,9 +29,9 @@ fastify.register(require('@fastify/cors'), {
   credentials: true
 });
 
-// Rate Limiting Dinámico
+// Rate Limiting Dinámico (Optimizado)
 const { rateLimitMiddleware } = require('./middleware/rateLimit');
-// fastify.addHook('onRequest', rateLimitMiddleware);
+fastify.addHook('onRequest', rateLimitMiddleware);
 
 // Routes
 fastify.register(routes);
