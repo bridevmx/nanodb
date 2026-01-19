@@ -14,14 +14,46 @@ async function routes(fastify, options) {
   // AUTHENTICATION
   // ═══════════════════════════════════════════════════════════════════════
 
-  fastify.post('/api/auth/login', async (req, reply) => {
-    const { email, password, collection = 'users' } = req.body;
-
-    if (!email || !password) {
-      return reply.code(400).send({
-        error: 'Email and password are required'
-      });
+  fastify.post('/api/auth/login', {
+    schema: {
+      body: {
+        type: 'object',
+        required: ['email', 'password', 'collection'],
+        properties: {
+          email: { type: 'string', format: 'email' },
+          password: { type: 'string', minLength: 6 },
+          collection: { type: 'string', pattern: '^[a-zA-Z0-9_]+$' }
+        }
+      },
+      response: {
+        200: {
+          type: 'object',
+          required: ['token', 'user'],
+          properties: {
+            token: { type: 'string' },
+            user: {
+              type: 'object',
+              additionalProperties: true, // Campos dinámicos
+              required: ['id', 'email'],
+              properties: {
+                id: { type: 'string' },
+                email: { type: 'string' }
+              }
+            }
+          }
+        },
+        400: {
+          type: 'object',
+          properties: { error: { type: 'string' } }
+        },
+        401: {
+          type: 'object',
+          properties: { error: { type: 'string' } }
+        }
+      }
     }
+  }, async (req, reply) => {
+    const { email, password, collection } = req.body;
 
     try {
       const result = await engine.list(collection, {
@@ -87,7 +119,45 @@ async function routes(fastify, options) {
   // CRUD: LIST
   // ═══════════════════════════════════════════════════════════════════════
 
-  fastify.get('/api/collections/:collection/records', async (req, reply) => {
+  fastify.get('/api/collections/:collection/records', {
+    schema: {
+      querystring: {
+        type: 'object',
+        properties: {
+          page: { type: 'integer', minimum: 1, default: 1 },
+          perPage: { type: 'integer', minimum: 1, maximum: 100, default: 30 },
+          filter: { type: 'string' },
+          sort: { type: 'string' }
+        }
+      },
+      response: {
+        200: {
+          type: 'object',
+          required: ['items', 'page', 'perPage', 'totalPages', 'totalItems'],
+          properties: {
+            items: {
+              type: 'array',
+              items: {
+                type: 'object',
+                additionalProperties: true, // ⚠️ CRÍTICO: Preservar campos del usuario
+                required: ['id', 'created', 'updated'],
+                properties: {
+                  id: { type: 'string' },
+                  created: { type: 'string' },
+                  updated: { type: 'string' },
+                  _version: { type: 'integer' }
+                }
+              }
+            },
+            page: { type: 'integer' },
+            perPage: { type: 'integer' },
+            totalPages: { type: 'integer' },
+            totalItems: { type: 'integer' }
+          }
+        }
+      }
+    }
+  }, async (req, reply) => {
     const { collection } = req.params;
 
     try {
@@ -132,7 +202,27 @@ async function routes(fastify, options) {
   // CRUD: CREATE
   // ═══════════════════════════════════════════════════════════════════════
 
-  fastify.post('/api/collections/:collection/records', async (req, reply) => {
+  fastify.post('/api/collections/:collection/records', {
+    schema: {
+      body: {
+        type: 'object',
+        additionalProperties: true // Campos dinámicos del usuario
+      },
+      response: {
+        201: {
+          type: 'object',
+          additionalProperties: true,
+          required: ['id', 'created', 'updated'],
+          properties: {
+            id: { type: 'string' },
+            created: { type: 'string' },
+            updated: { type: 'string' },
+            _version: { type: 'integer' }
+          }
+        }
+      }
+    }
+  }, async (req, reply) => {
     const { collection } = req.params;
     const data = req.body;
 
@@ -159,7 +249,27 @@ async function routes(fastify, options) {
   // CRUD: UPDATE
   // ═══════════════════════════════════════════════════════════════════════
 
-  fastify.patch('/api/collections/:collection/records/:id', async (req, reply) => {
+  fastify.patch('/api/collections/:collection/records/:id', {
+    schema: {
+      body: {
+        type: 'object',
+        additionalProperties: true // Campos dinámicos
+      },
+      response: {
+        200: {
+          type: 'object',
+          additionalProperties: true,
+          required: ['id', 'created', 'updated'],
+          properties: {
+            id: { type: 'string' },
+            created: { type: 'string' },
+            updated: { type: 'string' },
+            _version: { type: 'integer' }
+          }
+        }
+      }
+    }
+  }, async (req, reply) => {
     const { collection, id } = req.params;
     const data = req.body;
 
