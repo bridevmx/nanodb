@@ -305,6 +305,12 @@ async function routes(fastify, options) {
     const db = require('../core/db');
     return db.cache.getStats();
   });
+
+  // WriteBuffer stats (Fase 2: Group Commit)
+  fastify.get('/api/stats/buffer', async (req, reply) => {
+    const engine = require('../core/engine');
+    return engine.writeBuffer.getStats();
+  });
 }
 
 function parseFilter(filterStr) {

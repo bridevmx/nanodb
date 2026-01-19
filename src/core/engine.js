@@ -3,6 +3,7 @@ const db = require('./db');
 const schemaManager = require('./schema');
 const indexer = require('./indexer');
 const { SingleflightCache } = require('../utils/singleflight');
+const { getWriteBuffer } = require('./writeBuffer');
 
 const MAX_SCAN_LIMIT = parseInt(process.env.MAX_SCAN_LIMIT) || 100;
 
@@ -10,6 +11,12 @@ class Engine {
   constructor() {
     // Inicializar singleflight para prevenir thundering herd
     this.singleflight = new SingleflightCache(db.cache);
+
+    // Inicializar write buffer para Group Commit (Fase 2)
+    this.writeBuffer = getWriteBuffer({
+      flushInterval: parseInt(process.env.FLUSH_INTERVAL) || 20, // 20ms
+      maxBufferSize: parseInt(process.env.MAX_BUFFER_SIZE) || 100 // 100 ops
+    });
   }
 
   async get(collection, id) {
@@ -305,20 +312,19 @@ class Engine {
 
   /**
    * Escritura atómica: disco + caché en una operación
-   * Garantiza consistencia ACID completa
+   * Usa Group Commit para reducir contención de I/O (Fase 2)
    */
   async _atomicWrite(ops, cacheUpdates) {
-    // Ejecutar batch operation (transacción atómica en LMDB)
-    await db.root.batch(ops);
-
-    // Solo actualizar caché DESPUÉS de commit exitoso
-    for (const [key, value] of cacheUpdates) {
-      if (value === null) {
-        db.cache.del(key);
-      } else {
-        db.cache.set(key, value);
-      }
-    }
+    // Usar WriteBuffer para agrupar operaciones
+    return new Promise((resolve, reject) => {
+      this.writeBuffer.add(ops, cacheUpdates, (error) => {
+        if (error) {
+          reject(error);
+        } else {
+          resolve();
+        }
+      });
+    });
   }
 }
 
