@@ -163,7 +163,7 @@ module.exports = {
         if (!writeBufferInstance) {
             // Ignorar opciones viejas, forzar tuning agresivo
             writeBufferInstance = new WriteBuffer({
-                flushInterval: 50,    // 50ms window
+                flushInterval: 30,    // ⚡ AJUSTE FINAL: 30ms (Balance Throughput/Latencia)
                 maxBufferSize: 2000   // Gran capacidad
             });
         }
