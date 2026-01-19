@@ -89,6 +89,55 @@ class Engine {
       }
     }
 
+    // 🚀 OPTIMIZACIÓN: Si NO hay sort, aplicar paginación ANTES del fetch
+    if (!sort) {
+      // Filtrado de IDs en memoria (ligero)
+      const filteredIds = candidateIds.filter(id => {
+        const key = `${collection}:${id}`;
+        let data = db.cache.get(key);
+
+        if (!data) {
+          data = db.main.get(key);
+          if (data) db.cache.set(key, data);
+        }
+
+        if (!data) return false;
+
+        for (const [key, val] of Object.entries(filter)) {
+          if (data[key] != val) return false;
+        }
+        return true;
+      });
+
+      const totalItems = filteredIds.length;
+      const start = (page - 1) * perPage;
+      const paginatedIds = filteredIds.slice(start, start + perPage);
+
+      // Solo fetch de los registros necesarios para esta página
+      const results = paginatedIds.map(id => {
+        const key = `${collection}:${id}`;
+        return db.cache.get(key) || db.main.get(key);
+      }).filter(r => r);
+
+      const cleanResults = results.map(r => this._sanitize(collection, r));
+
+      return {
+        page: parseInt(page),
+        perPage: parseInt(perPage),
+        totalItems,
+        totalPages: Math.ceil(totalItems / perPage),
+        items: cleanResults
+      };
+    }
+
+    // ⚠️ CON SORT: Necesitamos cargar todo en memoria
+    if (candidateIds.length > 1000) {
+      console.warn(
+        `Warning: Sorting ${candidateIds.length} records in memory. ` +
+        `Consider adding an index for field '${sort}' or using cursor-based pagination.`
+      );
+    }
+
     // Fetch de datos (con cache)
     let results = candidateIds
       .map(id => {

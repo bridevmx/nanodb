@@ -9,11 +9,15 @@ class WriteBuffer {
         this.flushQueue = [];
         this.isFlushing = false;
 
+        // Cola de callbacks pendientes (para modo durabilidad)
+        this.pendingCallbacks = [];
+
         // Golden Ratio Config (Modo Volátil)
         this.flushInterval = options.flushInterval || 500;    // 500ms para bloques grandes
         this.maxBufferSize = options.maxBufferSize || 20000;  // Buffer grande para ráfagas
 
-        this.optimistic = true;
+        // Modo optimista controlado por variable de entorno (por defecto: false para durabilidad)
+        this.optimistic = process.env.OPTIMISTIC_MODE === 'true';
         this.isShuttingDown = false;
 
         this.stats = { totalOps: 0, totalFlushes: 0, lastBatchSize: 0, queueLength: 0 };
@@ -46,8 +50,8 @@ class WriteBuffer {
             this._applyCache([cacheUpdates]);
             callback(null);
         } else {
-            // Modo Seguro simplificado (en producción real, usar cola de callbacks)
-            callback(null);
+            // Modo Durabilidad: Callback se resuelve DESPUÉS del flush exitoso
+            this.pendingCallbacks.push({ ops, cacheUpdates, callback });
         }
 
         // Timer para flush periódico
@@ -125,23 +129,53 @@ class WriteBuffer {
     async _flushNow(opsArray) {
         if (!opsArray || opsArray.length === 0) return;
 
+        // Identificar callbacks asociados con este batch
+        const batchCallbacks = [];
+
         try {
             const allOps = [];
             for (let i = 0; i < opsArray.length; i++) {
                 const reqOps = opsArray[i];
+
+                // Buscar callbacks pendientes para estas ops
+                if (!this.optimistic) {
+                    const idx = this.pendingCallbacks.findIndex(pc => pc.ops === reqOps);
+                    if (idx !== -1) {
+                        batchCallbacks.push(this.pendingCallbacks[idx]);
+                        this.pendingCallbacks.splice(idx, 1);
+                    }
+                }
+
                 for (let j = 0; j < reqOps.length; j++) {
                     allOps.push(reqOps[j]);
                 }
             }
 
-            // Escritura física
+            // Escritura física a disco
             await db.root.batch(allOps);
 
             this.stats.totalFlushes++;
             this.stats.lastBatchSize = opsArray.length;
 
+            // ✅ ÉXITO: Aplicar cache y resolver callbacks DESPUÉS de escritura exitosa
+            if (!this.optimistic) {
+                for (const { cacheUpdates, callback } of batchCallbacks) {
+                    this._applyCache([cacheUpdates]);
+                    callback(null);
+                }
+            }
+
         } catch (error) {
             console.error('❌ Background Flush Failed:', error);
+
+            // ❌ ERROR: Rechazar callbacks con el error
+            if (!this.optimistic) {
+                for (const { callback } of batchCallbacks) {
+                    callback(error);
+                }
+            }
+
+            throw error;
         }
     }
 
