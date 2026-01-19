@@ -9,9 +9,9 @@ class WriteBuffer {
         this.flushQueue = [];
         this.isFlushing = false;
 
-        // Golden Ratio Config (Ajustada para Queue)
-        this.flushInterval = options.flushInterval || 30;
-        this.maxBufferSize = options.maxBufferSize || 5000; // Buffer grande seguro
+        // Golden Ratio Config (Modo Volátil)
+        this.flushInterval = options.flushInterval || 500;    // 500ms para bloques grandes
+        this.maxBufferSize = options.maxBufferSize || 20000;  // Buffer grande para ráfagas
 
         this.optimistic = true;
         this.isShuttingDown = false;
@@ -26,6 +26,15 @@ class WriteBuffer {
             await this._flushNow([ops]);
             this._applyCache(cacheUpdates);
             callback(null);
+            return;
+        }
+
+        // 🛡️ VÁLVULA DE SEGURIDAD: Backpressure
+        // Si tenemos más de 50 lotes pendientes, el disco no da abasto
+        if (this.flushQueue.length > 50) {
+            const error = new Error('System overloaded: Disk I/O lag');
+            error.code = 'EOVERLOAD';
+            callback(error);
             return;
         }
 

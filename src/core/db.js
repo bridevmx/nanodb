@@ -18,7 +18,10 @@ const rootDb = open({
   compression: false, // ← Desactivado para ahorrar CPU (Propuesta C)
   cache: true,
   maxDbs: 20,
-  mapSize: parseInt(process.env.DB_MAX_SIZE) || 2 * 1024 * 1024 * 1024
+  // ⚡ MODO VOLÁTIL: Máximo rendimiento
+  noSync: true,      // No esperar fsync (aumenta ops/s x10)
+  noMemInit: true,   // Evita limpiar buffers (ahorra CPU)
+  mapSize: 1024 * 1024 * 256 // Limitar a 256MB para VPS
 });
 
 // Inicializar cache
