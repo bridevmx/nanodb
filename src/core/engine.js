@@ -148,11 +148,14 @@ class Engine {
     // Atomic write: disco + caché en una operación
     await this._atomicWrite(ops, [[`${collection}:${id}`, record]]);
 
-    // Broadcast realtime
+    // Broadcast realtime (async - no bloquea respuesta HTTP)
     const realtime = require('../api/realtime');
-    realtime.broadcast(collection, 'create', this._sanitize(collection, record));
+    const sanitized = this._sanitize(collection, record);
+    setImmediate(() => {
+      realtime.broadcast(collection, 'create', sanitized);
+    });
 
-    return this._sanitize(collection, record);
+    return sanitized;
   }
 
   async update(collection, id, data) {
@@ -207,10 +210,14 @@ class Engine {
       // Atomic write: disco + caché en una operación
       await this._atomicWrite(ops, [[key, newRecord]]);
 
+      // Broadcast realtime (async - no bloquea respuesta HTTP)
       const realtime = require('../api/realtime');
-      realtime.broadcast(collection, 'update', this._sanitize(collection, newRecord));
+      const sanitized = this._sanitize(collection, newRecord);
+      setImmediate(() => {
+        realtime.broadcast(collection, 'update', sanitized);
+      });
 
-      return this._sanitize(collection, newRecord);
+      return sanitized;
     });
   }
 
@@ -247,8 +254,11 @@ class Engine {
       // Atomic write: disco + invalidación de caché
       await this._atomicWrite(ops, [[key, null]]);
 
+      // Broadcast realtime (async - no bloquea respuesta HTTP)
       const realtime = require('../api/realtime');
-      realtime.broadcast(collection, 'delete', { id });
+      setImmediate(() => {
+        realtime.broadcast(collection, 'delete', { id });
+      });
 
       return true;
     });

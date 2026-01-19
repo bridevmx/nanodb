@@ -5,7 +5,7 @@ const LRUCache = require('../utils/cache');
 
 // Configuración
 const DATA_PATH = process.env.DB_PATH || path.join(__dirname, '../../data');
-const MAX_CACHE_SIZE = parseInt(process.env.MAX_CACHE_SIZE) || 1000;
+const MAX_CACHE_SIZE = parseInt(process.env.MAX_CACHE_SIZE) || 50000; // ← Aumentado de 1000 a 50000
 
 // Crear directorio de datos
 if (!fs.existsSync(DATA_PATH)) {
@@ -15,7 +15,7 @@ if (!fs.existsSync(DATA_PATH)) {
 // Abrir base de datos LMDB
 const rootDb = open({
   path: DATA_PATH,
-  compression: true,
+  compression: false, // ← Desactivado para ahorrar CPU (Propuesta C)
   cache: true,
   maxDbs: 20,
   mapSize: parseInt(process.env.DB_MAX_SIZE) || 2 * 1024 * 1024 * 1024
