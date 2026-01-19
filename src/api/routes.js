@@ -206,7 +206,22 @@ async function routes(fastify, options) {
     schema: {
       body: {
         type: 'object',
-        additionalProperties: true // Campos dinámicos del usuario
+        // ⚡ TurboJSON: Definir campos conocidos para JIT
+        properties: {
+          // Campos comunes que usuarios suelen enviar
+          title: { type: 'string' },
+          name: { type: 'string' },
+          description: { type: 'string' },
+          content: { type: 'string' },
+          status: { type: 'string' },
+          email: { type: 'string' },
+          phone: { type: 'string' },
+          price: { type: 'number' },
+          quantity: { type: 'number' },
+          active: { type: 'boolean' },
+          verified: { type: 'boolean' }
+        },
+        additionalProperties: true // Mantener flexibilidad
       },
       response: {
         201: {
@@ -253,7 +268,22 @@ async function routes(fastify, options) {
     schema: {
       body: {
         type: 'object',
-        additionalProperties: true // Campos dinámicos
+        // ⚡ TurboJSON: Definir campos conocidos para JIT
+        properties: {
+          title: { type: 'string' },
+          name: { type: 'string' },
+          description: { type: 'string' },
+          content: { type: 'string' },
+          status: { type: 'string' },
+          email: { type: 'string' },
+          phone: { type: 'string' },
+          price: { type: 'number' },
+          quantity: { type: 'number' },
+          active: { type: 'boolean' },
+          verified: { type: 'boolean' },
+          _expectedVersion: { type: 'integer' }
+        },
+        additionalProperties: true // Mantener flexibilidad
       },
       response: {
         200: {

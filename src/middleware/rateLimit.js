@@ -84,15 +84,15 @@ async function getRateLimitConfig(method, path) {
  * Middleware de rate limiting
  */
 async function rateLimitMiddleware(request, reply) {
-    // Excluir rutas de sistema
-    if (request.url.startsWith('/health') ||
-        request.url.startsWith('/api/stats')) {
+    // ⚡ FASTEST BAIL-OUT: Chequeo de header optimizado
+    // Evitar split strings o lookups si es un test de carga autorizado
+    if (request.headers['x-skip-rate-limit'] === 'true') {
         return;
     }
 
-    // Excluir tests (detectar por User-Agent o header específico)
-    const userAgent = request.headers['user-agent'] || '';
-    if (userAgent.includes('stress-test') || request.headers['x-skip-rate-limit']) {
+    // Excluir rutas de sistema
+    if (request.url.startsWith('/health') ||
+        request.url.startsWith('/api/stats')) {
         return;
     }
 

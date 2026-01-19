@@ -5,7 +5,7 @@ const LRUCache = require('../utils/cache');
 
 // Configuración
 const DATA_PATH = process.env.DB_PATH || path.join(__dirname, '../../data');
-const MAX_CACHE_SIZE = parseInt(process.env.MAX_CACHE_SIZE) || 50000; // ← Aumentado de 1000 a 50000
+const MAX_CACHE_SIZE = parseInt(process.env.MAX_CACHE_SIZE) || 20000; // ← Reducido de 50000 a 20000 (GC optimization)
 
 // Crear directorio de datos
 if (!fs.existsSync(DATA_PATH)) {
