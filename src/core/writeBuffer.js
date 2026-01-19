@@ -24,7 +24,7 @@ class WriteBuffer {
         if (this.isShuttingDown) {
             // En shutdown, forzamos escritura síncrona/serial
             await this._flushNow([ops]);
-            this._applyCache(cacheUpdates);
+            this._applyCache([cacheUpdates]);
             callback(null);
             return;
         }

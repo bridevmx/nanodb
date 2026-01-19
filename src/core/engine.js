@@ -30,6 +30,20 @@ class Engine {
     });
   }
 
+  /**
+   * Lectura RAW sin sanitizar - SOLO para uso interno
+   * Previene pérdida de campos privados en updates/deletes
+   * @private
+   */
+  async _getRaw(collection, id) {
+    const key = `${collection}:${id}`;
+
+    // Usar singleflight para prevenir thundering herd
+    return await this.singleflight.get(key, async () => {
+      return db.main.get(key);
+    });
+  }
+
   async list(collection, options = {}) {
     const { filter = {}, sort, page = 1, perPage = 30 } = options;
     const schema = schemaManager.get(collection);
@@ -170,8 +184,8 @@ class Engine {
     return await this._retryOnConflict(async () => {
       const key = `${collection}:${id}`;
 
-      // Obtener registro actual con singleflight
-      const oldRecord = await this.get(collection, id);
+      // Obtener registro actual RAW (con campos privados) con singleflight
+      const oldRecord = await this._getRaw(collection, id);
 
       if (!oldRecord) throw new Error('Record not found');
 
@@ -233,8 +247,8 @@ class Engine {
     return await this._retryOnConflict(async () => {
       const key = `${collection}:${id}`;
 
-      // Obtener registro actual con singleflight
-      const oldRecord = await this.get(collection, id);
+      // Obtener registro actual RAW (con campos privados) con singleflight
+      const oldRecord = await this._getRaw(collection, id);
 
       if (!oldRecord) throw new Error('Record not found');
 

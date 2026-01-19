@@ -22,7 +22,7 @@ class SingleflightCache {
     async get(key, loader) {
         // 1. Intentar caché primero (fast path)
         const cached = this.cache.get(key);
-        if (cached !== null) {
+        if (cached !== undefined) {
             return cached;
         }
 

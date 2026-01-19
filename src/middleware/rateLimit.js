@@ -126,7 +126,7 @@ setInterval(() => {
     let cleaned = 0;
 
     for (const [key, record] of rateLimitStore.entries()) {
-        if (now > record.resetTime + 60000) { // 1 min después de expirar
+        if (now > record.resetTime + 30000) { // 30s después de expirar
             rateLimitStore.delete(key);
             cleaned++;
         }
@@ -135,7 +135,7 @@ setInterval(() => {
     if (cleaned > 0) {
         console.log(`🧹 Cleaned ${cleaned} expired rate limit entries`);
     }
-}, 60000); // Cada minuto
+}, 30000); // Cada 30 segundos
 
 // ═══════════════════════════════════════════════════════════════════════
 // EXPORTS
