@@ -31,7 +31,7 @@ fastify.register(require('@fastify/cors'), {
 
 // Rate Limiting Dinámico
 const { rateLimitMiddleware } = require('./middleware/rateLimit');
-fastify.addHook('onRequest', rateLimitMiddleware);
+// fastify.addHook('onRequest', rateLimitMiddleware);
 
 // Routes
 fastify.register(routes);
